@@ -238,7 +238,7 @@ body {
   padding: 14px;
   min-height: 480px;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
 }
 
 .terminal-header {
@@ -271,6 +271,29 @@ body {
   word-break: break-word;
 }
 
+
+.terminal-input {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+.terminal-input input {
+  width: 100%;
+  background: rgba(7, 13, 29, 0.8);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px;
+  font-family: "JetBrains Mono", "SFMono-Regular", monospace;
+  font-size: 12px;
+}
+
+.terminal-send {
+  white-space: nowrap;
+}
+
 .empty-state {
   color: var(--muted);
   text-align: center;
@@ -292,5 +315,9 @@ body {
 
   .terminal-panel {
     min-height: 380px;
+  }
+
+  .terminal-input {
+    grid-template-columns: 1fr;
   }
 }

@@ -36,6 +36,15 @@ export async function stopTask(taskId) {
   return parseJson(response);
 }
 
+export async function sendTaskInput(taskId, data) {
+  const response = await fetch(`/api/v1/tasks/${taskId}/input`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ data }),
+  });
+  return parseJson(response);
+}
+
 export async function fetchTaskEvents(taskId, fromSeq = 1) {
   const response = await fetch(`/api/v1/tasks/${taskId}/events?from_seq=${fromSeq}`);
   return parseJson(response);

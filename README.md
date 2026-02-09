@@ -55,3 +55,12 @@ docker compose up --build
 - Add Runner service managed by systemd for stronger process continuity.
 - Add auth, RBAC, and audit logging.
 - Integrate xterm.js for interactive TTY behavior.
+
+
+## Development stages
+
+- Plan overview: `/Users/yingjunnan/acweb/docs/development-plan.md`
+- Stage records: `/Users/yingjunnan/acweb/docs/stages/`
+  - Stage 1: interactive terminal baseline (completed)
+  - Stage 2: persistence and recovery (planned)
+  - Stage 3: auth, RBAC, and audit logging (planned)
