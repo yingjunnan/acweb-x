@@ -70,6 +70,7 @@ class TaskStore:
         self._subscribers_lock = asyncio.Lock()
         self._event_lock = asyncio.Lock()
         self._runtime: dict[str, RuntimeHandle] = {}
+        self._stopping_tasks: set[str] = set()
 
         self._redis_url = os.getenv("REDIS_URL")
         self._redis = None
@@ -181,25 +182,38 @@ class TaskStore:
             row = await session.get(TaskRow, task_id)
             if not row:
                 return None
-            if runtime and runtime.process.returncode is None:
+
+            state_changed = False
+            if row.state in ("queued", "running"):
                 row.state = "stopped"
+                state_changed = True
+
+            if state_changed:
                 await session.commit()
-                runtime.process.terminate()
 
         if runtime and runtime.process.returncode is None:
-            await self.append_event(task_id, "system", "[acweb] terminate signal sent\n")
+            self._stopping_tasks.add(task_id)
+            terminated = await self._terminate_runtime(runtime)
+            if terminated:
+                await self.append_event(task_id, "system", "[acweb] terminate signal sent\n")
+            else:
+                await self.append_event(task_id, "system", "[acweb] terminate signal sent (still stopping)\n")
 
         return await self.get_task(task_id)
 
     async def delete_task(self, task_id: str) -> str:
         runtime = self._runtime.get(task_id)
-        if runtime and runtime.process.returncode is None:
-            return "running"
 
         async with SessionLocal() as session:
             row = await session.get(TaskRow, task_id)
             if not row:
                 return "not_found"
+
+            if runtime and runtime.process.returncode is None:
+                if row.state != "stopped":
+                    return "running"
+                if not await self._terminate_runtime(runtime):
+                    return "running"
 
             if row.state in ("queued", "running"):
                 return "running"
@@ -215,9 +229,14 @@ class TaskStore:
         return "deleted"
 
     async def write_input(self, task_id: str, data: str) -> bool:
+        if task_id in self._stopping_tasks:
+            return False
+
         for _ in range(40):
             runtime = self._runtime.get(task_id)
             if runtime and runtime.process.returncode is None:
+                if task_id in self._stopping_tasks:
+                    return False
                 try:
                     os.write(runtime.master_fd, data.encode("utf-8", errors="replace"))
                 except OSError:
@@ -247,6 +266,32 @@ class TaskStore:
             return False
 
         return True
+
+    async def _terminate_runtime(self, runtime: RuntimeHandle, timeout_seconds: float = 1.5) -> bool:
+        if runtime.process.returncode is not None:
+            return True
+
+        with contextlib.suppress(Exception):
+            pgid = os.getpgid(runtime.process.pid)
+            os.killpg(pgid, signal.SIGTERM)
+
+        with contextlib.suppress(Exception):
+            runtime.process.terminate()
+
+        try:
+            await asyncio.wait_for(runtime.process.wait(), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(Exception):
+                pgid = os.getpgid(runtime.process.pid)
+                os.killpg(pgid, signal.SIGKILL)
+
+            with contextlib.suppress(Exception):
+                runtime.process.kill()
+
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(runtime.process.wait(), timeout=1.0)
+
+        return runtime.process.returncode is not None
 
     async def subscribe(self, task_id: str) -> tuple[TaskRecord | None, asyncio.Queue[TaskEvent] | None]:
         task = await self.get_task(task_id)
@@ -335,6 +380,7 @@ class TaskStore:
     async def _run_task(self, task_id: str) -> None:
         task = await self.get_task(task_id)
         if not task:
+            self._stopping_tasks.discard(task_id)
             return
 
         await self._mark_started(task_id)
@@ -407,6 +453,7 @@ class TaskStore:
                 with contextlib.suppress(OSError):
                     os.close(slave_fd)
 
+            self._stopping_tasks.discard(task_id)
             current = await self.get_task(task_id)
             if current and current.state == "stopped":
                 final_state = "stopped"

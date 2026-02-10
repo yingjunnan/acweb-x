@@ -18,6 +18,7 @@ Features in this scaffold:
 - `POST /api/v1/tasks/{id}/input` send stdin input to running task.
 - `POST /api/v1/tasks/{id}/stop` terminate running tasks.
 - `DELETE /api/v1/tasks/{id}` delete task records and stored event history.
+  - Delete requires task to be non-running (stop first for active sessions).
 - `WS /ws/tasks/{id}` attach to live output and stream terminal events.
 
 Persistence behavior:

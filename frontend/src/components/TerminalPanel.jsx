@@ -18,6 +18,7 @@ export default function TerminalPanel({
   const resizeDisposableRef = useRef(null);
   const resizeObserverRef = useRef(null);
   const fitRafRef = useRef(0);
+  const disposeTimerRef = useRef(0);
   const lastSeqRef = useRef(0);
   const currentTaskIdRef = useRef(null);
   const replayGuardRef = useRef(0);
@@ -31,6 +32,7 @@ export default function TerminalPanel({
     if (!terminal || !currentTaskIdRef.current) {
       return;
     }
+
     if (terminal.cols > 0 && terminal.rows > 0) {
       onResizeTerminalRef.current?.(terminal.cols, terminal.rows);
     }
@@ -40,6 +42,7 @@ export default function TerminalPanel({
     const terminal = terminalRef.current;
     const fitAddon = fitAddonRef.current;
     const host = hostRef.current;
+
     if (!terminal || !fitAddon || !host || !host.isConnected) {
       return false;
     }
@@ -80,30 +83,40 @@ export default function TerminalPanel({
       return undefined;
     }
 
-    const terminal = new Terminal({
-      convertEol: false,
-      cursorBlink: true,
-      cursorStyle: "bar",
-      fontFamily: '"JetBrains Mono", "SFMono-Regular", monospace',
-      fontSize: 12,
-      lineHeight: 1.45,
-      scrollback: 5000,
-      theme: {
-        background: "#070d1f",
-        foreground: "#d8e2ff",
-        cursor: "#7cffde",
-      },
-    });
+    if (disposeTimerRef.current) {
+      window.clearTimeout(disposeTimerRef.current);
+      disposeTimerRef.current = 0;
+    }
 
-    const fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.open(host);
+    let terminal = terminalRef.current;
+    let fitAddon = fitAddonRef.current;
 
-    terminalRef.current = terminal;
-    fitAddonRef.current = fitAddon;
+    if (!terminal || !fitAddon) {
+      terminal = new Terminal({
+        convertEol: false,
+        cursorBlink: true,
+        cursorStyle: "bar",
+        fontFamily: '"JetBrains Mono", "SFMono-Regular", monospace',
+        fontSize: 12,
+        lineHeight: 1.45,
+        scrollback: 5000,
+        theme: {
+          background: "#070d1f",
+          foreground: "#d8e2ff",
+          cursor: "#7cffde",
+        },
+      });
 
-    scheduleFit(true);
-    terminal.focus();
+      fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+      terminal.open(host);
+
+      terminalRef.current = terminal;
+      fitAddonRef.current = fitAddon;
+    }
+
+    terminalDisposableRef.current?.dispose();
+    resizeDisposableRef.current?.dispose();
 
     terminalDisposableRef.current = terminal.onData((data) => {
       if (!currentTaskIdRef.current) {
@@ -133,21 +146,39 @@ export default function TerminalPanel({
     };
     host.addEventListener("mousedown", handleMouseDown);
 
+    scheduleFit(true);
+    terminal.focus();
+
     return () => {
       host.removeEventListener("mousedown", handleMouseDown);
-      if (fitRafRef.current) {
-        window.cancelAnimationFrame(fitRafRef.current);
-        fitRafRef.current = 0;
-      }
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
+
       terminalDisposableRef.current?.dispose();
       terminalDisposableRef.current = null;
       resizeDisposableRef.current?.dispose();
       resizeDisposableRef.current = null;
-      terminal.dispose();
-      terminalRef.current = null;
-      fitAddonRef.current = null;
+
+      if (fitRafRef.current) {
+        window.cancelAnimationFrame(fitRafRef.current);
+        fitRafRef.current = 0;
+      }
+
+      const terminalToDispose = terminalRef.current;
+      const fitAddonToDispose = fitAddonRef.current;
+
+      disposeTimerRef.current = window.setTimeout(() => {
+        disposeTimerRef.current = 0;
+
+        if (terminalRef.current === terminalToDispose) {
+          terminalToDispose?.dispose();
+          terminalRef.current = null;
+        }
+
+        if (fitAddonRef.current === fitAddonToDispose) {
+          fitAddonRef.current = null;
+        }
+      }, 80);
     };
   }, []);
 
@@ -183,6 +214,7 @@ export default function TerminalPanel({
       if (event.seq <= lastSeqRef.current) {
         continue;
       }
+
       if (event.seq <= replayCutoffSeq) {
         replayGuardRef.current += 1;
         terminal.write(event.data, () => {
@@ -191,6 +223,7 @@ export default function TerminalPanel({
       } else {
         terminal.write(event.data);
       }
+
       lastSeqRef.current = event.seq;
     }
   }, [events, replayCutoffSeq]);

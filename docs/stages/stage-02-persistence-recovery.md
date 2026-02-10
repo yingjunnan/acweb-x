@@ -38,6 +38,7 @@ Status: In Progress
 - Refined replay/live split so only history replay is guarded (live output keeps terminal-query replies), fixing `codex` cursor-position detection in interactive shells.
 - Added frontend missing-task fallback to avoid websocket reconnect loops when a previously selected task no longer exists.
 - Added manual task record deletion flow (backend `DELETE /api/v1/tasks/{id}` + frontend sidebar action) for cleaning historical task/event data.
+- Hardened stop/delete semantics: stopping now terminates the full process group, blocks new input while stopping, and allows delete right after stop once process teardown completes.
 - Hardened xterm fit scheduling with requestAnimationFrame guards to avoid `dimensions` undefined errors when switching tasks or remounting terminal panel.
 
 ## Verification Notes
