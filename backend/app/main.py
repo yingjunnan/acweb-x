@@ -77,6 +77,16 @@ async def stop_task(task_id: str) -> dict[str, Any]:
     return {"ok": True, "task_id": task_id}
 
 
+@app.delete("/api/v1/tasks/{task_id}")
+async def delete_task(task_id: str) -> dict[str, Any]:
+    result = await store.delete_task(task_id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="Task not found")
+    if result == "running":
+        raise HTTPException(status_code=409, detail="Stop running task before deleting it")
+    return {"ok": True, "task_id": task_id}
+
+
 @app.post("/api/v1/tasks/{task_id}/input")
 async def write_input(task_id: str, payload: TaskInputRequest) -> dict[str, Any]:
     success = await store.write_input(task_id, payload.data)

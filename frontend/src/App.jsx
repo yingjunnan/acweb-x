@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import CommandComposer from "./components/CommandComposer";
 import TaskSidebar from "./components/TaskSidebar";
 import TerminalPanel from "./components/TerminalPanel";
-import { createTask, fetchProjects, fetchTaskEvents, fetchTasks, sendTaskInput, stopTask } from "./api";
+import { createTask, deleteTask, fetchProjects, fetchTaskEvents, fetchTasks, sendTaskInput, stopTask } from "./api";
 
 function mergeEvents(previous, incoming) {
   const map = new Map();
@@ -67,6 +67,38 @@ export default function App() {
     nextSeqRef.current = 1;
     setReplayCutoffSeq(0);
 
+    async function resolveMissingTask(message = "Task no longer exists") {
+      try {
+        const taskData = await fetchTasks();
+        if (closed) {
+          return;
+        }
+
+        setTasks(taskData);
+        if (!taskData.length) {
+          setSelectedTaskId(null);
+          setError(message);
+          return;
+        }
+
+        const fallbackTask = taskData.find((item) => item.id === selectedTaskId) ?? taskData[0];
+        if (fallbackTask.id !== selectedTaskId) {
+          setSelectedTaskId(fallbackTask.id);
+          setError(`${message}. Switched to another task.`);
+        } else {
+          setError(message);
+        }
+      } catch (err) {
+        if (!closed) {
+          setError(err.message || message);
+        }
+      } finally {
+        if (!closed) {
+          setSocketState("disconnected");
+        }
+      }
+    }
+
     async function openSocket() {
       const fromSeq = nextSeqRef.current;
 
@@ -79,9 +111,14 @@ export default function App() {
         nextSeqRef.current = history.next_seq || nextSeqRef.current;
         setReplayCutoffSeq(Math.max(0, nextSeqRef.current - 1));
       } catch (err) {
-        if (!closed) {
-          setError(err.message);
+        if (closed) {
+          return;
         }
+        if (err?.status === 404) {
+          await resolveMissingTask();
+          return;
+        }
+        setError(err.message);
       }
 
       if (closed) {
@@ -127,17 +164,28 @@ export default function App() {
           }
 
           if (payload.type === "error") {
-            setError(payload.message || "Socket error");
+            const message = payload.message || "Socket error";
+            if (message.toLowerCase().includes("task not found")) {
+              socket.close(4404, "task_not_found");
+              return;
+            }
+            setError(message);
           }
         } catch {
           setError("Invalid socket message");
         }
       };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (closed) {
           return;
         }
+
+        if (event.code === 4404) {
+          void resolveMissingTask();
+          return;
+        }
+
         setSocketState("reconnecting");
         reconnectTimer = window.setTimeout(() => {
           if (!closed) {
@@ -194,6 +242,29 @@ export default function App() {
     }
   }
 
+  async function handleDeleteTask(taskId) {
+    try {
+      const target = tasks.find((task) => task.id === taskId);
+      if (!target) {
+        return;
+      }
+      const confirmed = window.confirm(`Delete task ${taskId.slice(0, 8)} and all events?`);
+      if (!confirmed) {
+        return;
+      }
+
+      await deleteTask(taskId);
+      await refreshTasks();
+      if (selectedTaskId === taskId) {
+        setEvents([]);
+        nextSeqRef.current = 1;
+        setReplayCutoffSeq(0);
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   function handleSendTaskInput(data) {
     if (!selectedTaskId) {
       return;
@@ -236,7 +307,12 @@ export default function App() {
       {error && <div className="error-banner">{error}</div>}
 
       <main className="layout">
-        <TaskSidebar tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={setSelectedTaskId} />
+        <TaskSidebar
+          tasks={tasks}
+          selectedTaskId={selectedTaskId}
+          onSelectTask={setSelectedTaskId}
+          onDeleteTask={handleDeleteTask}
+        />
         <section className="workspace">
           <CommandComposer onSubmit={handleCreateTask} busy={busy} defaultCwd={projects[0]?.path} />
           <TerminalPanel

@@ -35,6 +35,10 @@ Status: In Progress
 - Added optional Redis pub/sub fan-out for websocket subscribers with local fallback dispatch and app lifecycle startup/shutdown hooks.
 - Added terminal resize synchronization (`cols`/`rows`) and PTY controlling-terminal setup to improve zsh prompt layout, cursor visibility, and Ctrl+C behavior in web terminal sessions.
 - Added frontend replay-input guard to prevent xterm terminal-query replies from being sent back as user input when switching tasks or replaying history.
+- Refined replay/live split so only history replay is guarded (live output keeps terminal-query replies), fixing `codex` cursor-position detection in interactive shells.
+- Added frontend missing-task fallback to avoid websocket reconnect loops when a previously selected task no longer exists.
+- Added manual task record deletion flow (backend `DELETE /api/v1/tasks/{id}` + frontend sidebar action) for cleaning historical task/event data.
+- Hardened xterm fit scheduling with requestAnimationFrame guards to avoid `dimensions` undefined errors when switching tasks or remounting terminal panel.
 
 ## Verification Notes
 
@@ -48,6 +52,7 @@ Status: In Progress
   - check: `alembic_version` + tables exist.
 - Existing auto-created dev DB can be integrated by `docker compose run --rm backend alembic stamp head`.
 - PTY interactive shell flow validated (`sh -i` task + input + output marker + stop).
+- Smoke test now verifies task deletion removes list entries and returns `404` on events replay endpoint.
 
 ## Exit Criteria Tracking
 

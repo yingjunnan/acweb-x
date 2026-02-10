@@ -17,6 +17,7 @@ Features in this scaffold:
 - `GET /api/v1/tasks/{id}/events` replay logs by sequence cursor.
 - `POST /api/v1/tasks/{id}/input` send stdin input to running task.
 - `POST /api/v1/tasks/{id}/stop` terminate running tasks.
+- `DELETE /api/v1/tasks/{id}` delete task records and stored event history.
 - `WS /ws/tasks/{id}` attach to live output and stream terminal events.
 
 Persistence behavior:

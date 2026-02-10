@@ -28,6 +28,7 @@ Last updated: 2026-02-10
   6. API smoke test (create/list/events + restart persistence) passed.
   7. Web terminal upgraded to xterm.js for ANSI/interactive shell compatibility.
   8. Optional Redis pub/sub fan-out for websocket subscribers added (with graceful fallback to local dispatch).
+  9. Manual task record deletion API/UI added for history cleanup.
 - Remaining Stage 2 milestones:
   1. Define restart-safe active-task reconciliation strategy for true process continuity.
   2. Add high-availability cursor cache strategy (optional optimization after baseline reconciliation).

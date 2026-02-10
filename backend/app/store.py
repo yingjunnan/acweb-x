@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, cast
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from .db import SessionLocal, TaskEventRow, TaskRow
 from .models import Project, StreamType, TaskEvent, TaskState, TaskSummary
@@ -190,6 +190,29 @@ class TaskStore:
             await self.append_event(task_id, "system", "[acweb] terminate signal sent\n")
 
         return await self.get_task(task_id)
+
+    async def delete_task(self, task_id: str) -> str:
+        runtime = self._runtime.get(task_id)
+        if runtime and runtime.process.returncode is None:
+            return "running"
+
+        async with SessionLocal() as session:
+            row = await session.get(TaskRow, task_id)
+            if not row:
+                return "not_found"
+
+            if row.state in ("queued", "running"):
+                return "running"
+
+            await session.execute(delete(TaskEventRow).where(TaskEventRow.task_id == task_id))
+            await session.delete(row)
+            await session.commit()
+
+        async with self._subscribers_lock:
+            self._subscribers.pop(task_id, None)
+
+        await self._stop_redis_listener(task_id)
+        return "deleted"
 
     async def write_input(self, task_id: str, data: str) -> bool:
         for _ in range(40):

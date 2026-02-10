@@ -17,6 +17,7 @@ export default function TerminalPanel({
   const terminalDisposableRef = useRef(null);
   const resizeDisposableRef = useRef(null);
   const resizeObserverRef = useRef(null);
+  const fitRafRef = useRef(0);
   const lastSeqRef = useRef(0);
   const currentTaskIdRef = useRef(null);
   const replayGuardRef = useRef(0);
@@ -24,6 +25,46 @@ export default function TerminalPanel({
   const onResizeTerminalRef = useRef(onResizeTerminal);
 
   const writable = useMemo(() => Boolean(task && task.state === "running"), [task]);
+
+  const syncSizeToBackend = () => {
+    const terminal = terminalRef.current;
+    if (!terminal || !currentTaskIdRef.current) {
+      return;
+    }
+    if (terminal.cols > 0 && terminal.rows > 0) {
+      onResizeTerminalRef.current?.(terminal.cols, terminal.rows);
+    }
+  };
+
+  const safeFit = () => {
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    const host = hostRef.current;
+    if (!terminal || !fitAddon || !host || !host.isConnected) {
+      return false;
+    }
+
+    try {
+      fitAddon.fit();
+    } catch {
+      return false;
+    }
+
+    return terminal.cols > 0 && terminal.rows > 0;
+  };
+
+  const scheduleFit = (shouldSyncBackend = false) => {
+    if (fitRafRef.current) {
+      window.cancelAnimationFrame(fitRafRef.current);
+    }
+
+    fitRafRef.current = window.requestAnimationFrame(() => {
+      fitRafRef.current = 0;
+      if (safeFit() && shouldSyncBackend) {
+        syncSizeToBackend();
+      }
+    });
+  };
 
   useEffect(() => {
     onSendInputRef.current = onSendInput;
@@ -57,20 +98,12 @@ export default function TerminalPanel({
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(host);
-    fitAddon.fit();
-    terminal.focus();
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    const syncSize = () => {
-      if (!currentTaskIdRef.current) {
-        return;
-      }
-      if (terminal.cols > 0 && terminal.rows > 0) {
-        onResizeTerminalRef.current?.(terminal.cols, terminal.rows);
-      }
-    };
+    scheduleFit(true);
+    terminal.focus();
 
     terminalDisposableRef.current = terminal.onData((data) => {
       if (!currentTaskIdRef.current) {
@@ -90,8 +123,7 @@ export default function TerminalPanel({
     });
 
     const observer = new ResizeObserver(() => {
-      fitAddon.fit();
-      syncSize();
+      scheduleFit(true);
     });
     observer.observe(host);
     resizeObserverRef.current = observer;
@@ -103,6 +135,10 @@ export default function TerminalPanel({
 
     return () => {
       host.removeEventListener("mousedown", handleMouseDown);
+      if (fitRafRef.current) {
+        window.cancelAnimationFrame(fitRafRef.current);
+        fitRafRef.current = 0;
+      }
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
       terminalDisposableRef.current?.dispose();
@@ -132,11 +168,8 @@ export default function TerminalPanel({
         return;
       }
 
-      fitAddonRef.current?.fit();
+      scheduleFit(true);
       terminal.focus();
-      if (terminal.cols > 0 && terminal.rows > 0) {
-        onResizeTerminalRef.current?.(terminal.cols, terminal.rows);
-      }
     }
   }, [task]);
 
@@ -163,15 +196,7 @@ export default function TerminalPanel({
   }, [events, replayCutoffSeq]);
 
   useEffect(() => {
-    const fitAddon = fitAddonRef.current;
-    const terminal = terminalRef.current;
-    if (!fitAddon || !terminal) {
-      return;
-    }
-    fitAddon.fit();
-    if (currentTaskIdRef.current && terminal.cols > 0 && terminal.rows > 0) {
-      onResizeTerminalRef.current?.(terminal.cols, terminal.rows);
-    }
+    scheduleFit(true);
   }, [socketState]);
 
   return (

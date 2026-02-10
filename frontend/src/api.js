@@ -5,7 +5,10 @@ const headers = {
 async function parseJson(response) {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || `Request failed: ${response.status}`);
+    const error = new Error(payload.detail || `Request failed: ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
   return response.json();
 }
@@ -32,6 +35,13 @@ export async function createTask(command, cwd) {
 export async function stopTask(taskId) {
   const response = await fetch(`/api/v1/tasks/${taskId}/stop`, {
     method: "POST",
+  });
+  return parseJson(response);
+}
+
+export async function deleteTask(taskId) {
+  const response = await fetch(`/api/v1/tasks/${taskId}`, {
+    method: "DELETE",
   });
   return parseJson(response);
 }

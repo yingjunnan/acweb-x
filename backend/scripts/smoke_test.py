@@ -25,6 +25,15 @@ def post_json(path: str, payload: dict) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def delete_json(path: str) -> dict:
+    req = urllib.request.Request(
+        f"{BASE_URL}{path}",
+        method="DELETE",
+    )
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def wait_health(timeout_seconds: int = 20) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -54,6 +63,20 @@ def main() -> None:
     items = events_payload.get("items", []) if isinstance(events_payload, dict) else []
     if not any("smoke-test-ok" in item.get("data", "") for item in items):
         raise RuntimeError("expected stdout content not found in events")
+
+    delete_json(f"/api/v1/tasks/{task_id}")
+
+    tasks_after_delete = get_json("/api/v1/tasks")
+    if not isinstance(tasks_after_delete, list) or any(task.get("id") == task_id for task in tasks_after_delete):
+        raise RuntimeError("deleted task still exists in list")
+
+    try:
+        get_json(f"/api/v1/tasks/{task_id}/events?from_seq=1")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise RuntimeError(f"unexpected status after delete: {exc.code}") from exc
+    else:
+        raise RuntimeError("deleted task events endpoint should return 404")
 
     print("smoke_test_passed", task_id, len(items))
 
