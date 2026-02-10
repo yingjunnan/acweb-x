@@ -261,37 +261,43 @@ body {
   border-radius: 10px;
   background: #070d1f;
   border: 1px solid #27365f;
-  padding: 14px;
-  color: #d8e2ff;
-  font-family: "JetBrains Mono", "SFMono-Regular", monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
+  min-height: 360px;
+  overflow: hidden;
 }
 
-
-.terminal-input {
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-}
-
-.terminal-input input {
-  width: 100%;
-  background: rgba(7, 13, 29, 0.8);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text);
+.terminal-output .xterm {
+  height: 100%;
   padding: 10px;
-  font-family: "JetBrains Mono", "SFMono-Regular", monospace;
+}
+
+.terminal-status {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
   font-size: 12px;
 }
 
-.terminal-send {
-  white-space: nowrap;
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+  background: #8899bf;
+}
+
+.status-connected {
+  background: #4de2c5;
+}
+
+.status-connecting,
+.status-reconnecting {
+  background: #ffd66b;
+}
+
+.status-disconnected {
+  background: #ff7a7a;
 }
 
 .empty-state {
@@ -317,7 +323,4 @@ body {
     min-height: 380px;
   }
 
-  .terminal-input {
-    grid-template-columns: 1fr;
-  }
 }

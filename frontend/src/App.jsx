@@ -22,6 +22,7 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [socketState, setSocketState] = useState("disconnected");
 
   const wsRef = useRef(null);
   const nextSeqRef = useRef(1);
@@ -52,6 +53,7 @@ export default function App() {
     if (!selectedTaskId) {
       setEvents([]);
       nextSeqRef.current = 1;
+      setSocketState("disconnected");
       return undefined;
     }
 
@@ -86,9 +88,11 @@ export default function App() {
         `${protocol}://${window.location.host}/ws/tasks/${selectedTaskId}?from_seq=${nextSeqRef.current}`
       );
       wsRef.current = socket;
+      setSocketState("connecting");
 
       socket.onopen = () => {
         setError("");
+        setSocketState("connected");
       };
 
       socket.onmessage = (event) => {
@@ -124,6 +128,7 @@ export default function App() {
         if (closed) {
           return;
         }
+        setSocketState("reconnecting");
         reconnectTimer = window.setTimeout(() => {
           if (!closed) {
             openSocket();
@@ -139,6 +144,7 @@ export default function App() {
       if (reconnectTimer) {
         window.clearTimeout(reconnectTimer);
       }
+      setSocketState("disconnected");
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -178,15 +184,20 @@ export default function App() {
     }
   }
 
-  async function handleSendTaskInput(data) {
+  function handleSendTaskInput(data) {
     if (!selectedTaskId) {
       return;
     }
-    try {
-      await sendTaskInput(selectedTaskId, data);
-    } catch (err) {
-      setError(err.message);
+
+    const socket = wsRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "input", data }));
+      return;
     }
+
+    sendTaskInput(selectedTaskId, data).catch((err) => {
+      setError(err.message);
+    });
   }
 
   return (
@@ -210,6 +221,7 @@ export default function App() {
             events={events}
             onStopTask={handleStopTask}
             onSendInput={handleSendTaskInput}
+            socketState={socketState}
           />
         </section>
       </main>

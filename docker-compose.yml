@@ -1,14 +1,36 @@
-version: "3.9"
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: acweb
+      POSTGRES_USER: acweb
+      POSTGRES_PASSWORD: acweb_dev_pw
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acweb -d acweb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   backend:
     build:
       context: ./backend
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: postgresql+asyncpg://acweb:acweb_dev_pw@postgres:5432/acweb
+      DB_INIT_RETRIES: "30"
+      DB_INIT_RETRY_DELAY: "1.0"
+      AUTO_CREATE_TABLES: "1"
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:
@@ -21,3 +43,6 @@ services:
       - /app/node_modules
     depends_on:
       - backend
+
+volumes:
+  postgres_data:

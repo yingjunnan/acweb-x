@@ -17,3 +17,7 @@ dist/
 # Runtime
 *.log
 .env
+
+# Local database
+acweb.db
+backend/acweb.db

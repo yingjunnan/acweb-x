@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from .db import init_db
 from .models import CreateTaskResponse, EventsResponse, TaskCreateRequest, TaskDetail, TaskInputRequest
 from .store import store
 
@@ -19,6 +20,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    await init_db()
+    await store.recover_incomplete_tasks()
 
 
 @app.get("/api/v1/health")

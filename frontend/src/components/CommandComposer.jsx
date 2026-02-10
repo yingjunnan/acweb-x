@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 export default function CommandComposer({ onSubmit, busy, defaultCwd }) {
-  const [command, setCommand] = useState("echo 'acweb ready'");
+  const [command, setCommand] = useState("zsh -i");
   const [cwd, setCwd] = useState(defaultCwd || "");
 
   async function handleSubmit(event) {
@@ -20,7 +20,7 @@ export default function CommandComposer({ onSubmit, busy, defaultCwd }) {
         <input
           value={command}
           onChange={(event) => setCommand(event.target.value)}
-          placeholder={'codex run "draft blog"'}
+          placeholder="zsh -i"
         />
       </label>
       <label className="field">

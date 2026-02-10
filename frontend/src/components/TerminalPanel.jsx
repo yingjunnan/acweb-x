@@ -1,38 +1,114 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { Terminal } from "xterm";
+import { FitAddon } from "xterm-addon-fit";
 
-function renderTimestamp(ts) {
-  return new Date(ts).toLocaleTimeString();
-}
+export default function TerminalPanel({ task, events, onStopTask, onSendInput, socketState }) {
+  const hostRef = useRef(null);
+  const terminalRef = useRef(null);
+  const fitAddonRef = useRef(null);
+  const terminalDisposableRef = useRef(null);
+  const resizeObserverRef = useRef(null);
+  const lastSeqRef = useRef(0);
+  const currentTaskIdRef = useRef(null);
+  const onSendInputRef = useRef(onSendInput);
 
-export default function TerminalPanel({ task, events, onStopTask, onSendInput }) {
-  const [inputValue, setInputValue] = useState("");
-  const [sending, setSending] = useState(false);
+  const writable = useMemo(() => Boolean(task && task.state === "running"), [task]);
 
-  const lines = useMemo(() => {
-    return events.map((event) => {
-      const stream = event.stream === "system" ? "SYS" : event.stream.toUpperCase();
-      return `[${renderTimestamp(event.ts)}] ${stream} ${event.data}`;
+  useEffect(() => {
+    onSendInputRef.current = onSendInput;
+  }, [onSendInput]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) {
+      return undefined;
+    }
+
+    const terminal = new Terminal({
+      convertEol: false,
+      cursorBlink: true,
+      fontFamily: '"JetBrains Mono", "SFMono-Regular", monospace',
+      fontSize: 12,
+      lineHeight: 1.45,
+      scrollback: 5000,
+      theme: {
+        background: "#070d1f",
+        foreground: "#d8e2ff",
+        cursor: "#7cffde",
+      },
     });
-  }, [events]);
 
-  const writable = Boolean(task && (task.state === "running" || task.state === "queued"));
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(host);
+    fitAddon.fit();
+    terminal.focus();
 
-  async function handleSend(event) {
-    event.preventDefault();
-    if (!writable || !inputValue.trim()) {
+    terminalRef.current = terminal;
+    fitAddonRef.current = fitAddon;
+
+    terminalDisposableRef.current = terminal.onData((data) => {
+      if (!currentTaskIdRef.current) {
+        return;
+      }
+      onSendInputRef.current(data);
+    });
+
+    const observer = new ResizeObserver(() => {
+      fitAddon.fit();
+    });
+    observer.observe(host);
+    resizeObserverRef.current = observer;
+
+    return () => {
+      resizeObserverRef.current?.disconnect();
+      resizeObserverRef.current = null;
+      terminalDisposableRef.current?.dispose();
+      terminalDisposableRef.current = null;
+      terminal.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) {
       return;
     }
 
-    const payload = inputValue.endsWith("\n") ? inputValue : `${inputValue}\n`;
-
-    setSending(true);
-    try {
-      await onSendInput(payload);
-      setInputValue("");
-    } finally {
-      setSending(false);
+    if (currentTaskIdRef.current !== (task?.id ?? null)) {
+      currentTaskIdRef.current = task?.id ?? null;
+      lastSeqRef.current = 0;
+      terminal.clear();
+      if (!task) {
+        terminal.writeln("Select a task to attach");
+      }
     }
-  }
+  }, [task]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) {
+      return;
+    }
+
+    for (const event of events) {
+      if (event.seq <= lastSeqRef.current) {
+        continue;
+      }
+      terminal.write(event.data);
+      lastSeqRef.current = event.seq;
+    }
+  }, [events]);
+
+  useEffect(() => {
+    const fitAddon = fitAddonRef.current;
+    if (!fitAddon) {
+      return;
+    }
+    fitAddon.fit();
+  }, [socketState]);
 
   return (
     <section className="panel terminal-panel">
@@ -60,19 +136,13 @@ export default function TerminalPanel({ task, events, onStopTask, onSendInput })
         )}
       </div>
 
-      <pre className="terminal-output">{lines.length ? lines.join("") : "No output yet."}</pre>
+      <div className="terminal-output" ref={hostRef} />
 
-      <form className="terminal-input" onSubmit={handleSend}>
-        <input
-          value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
-          placeholder={writable ? "Type command input and send" : "Task is not writable"}
-          disabled={!writable || sending}
-        />
-        <button className="btn-primary terminal-send" type="submit" disabled={!writable || sending || !inputValue.trim()}>
-          {sending ? "Sending..." : "Send Input"}
-        </button>
-      </form>
+      <div className="terminal-status">
+        <span className={`status-dot status-${socketState}`} />
+        <span>Socket: {socketState}</span>
+        <span>{writable ? "Input enabled" : "Input disabled"}</span>
+      </div>
     </section>
   );
 }
