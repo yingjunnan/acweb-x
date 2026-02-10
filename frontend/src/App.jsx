@@ -23,9 +23,11 @@ export default function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [socketState, setSocketState] = useState("disconnected");
+  const [replayCutoffSeq, setReplayCutoffSeq] = useState(0);
 
   const wsRef = useRef(null);
   const nextSeqRef = useRef(1);
+  const terminalSizeRef = useRef({ cols: 0, rows: 0 });
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
@@ -53,6 +55,7 @@ export default function App() {
     if (!selectedTaskId) {
       setEvents([]);
       nextSeqRef.current = 1;
+      setReplayCutoffSeq(0);
       setSocketState("disconnected");
       return undefined;
     }
@@ -62,6 +65,7 @@ export default function App() {
 
     setEvents([]);
     nextSeqRef.current = 1;
+    setReplayCutoffSeq(0);
 
     async function openSocket() {
       const fromSeq = nextSeqRef.current;
@@ -73,6 +77,7 @@ export default function App() {
         }
         setEvents((prev) => mergeEvents(prev, history.items || []));
         nextSeqRef.current = history.next_seq || nextSeqRef.current;
+        setReplayCutoffSeq(Math.max(0, nextSeqRef.current - 1));
       } catch (err) {
         if (!closed) {
           setError(err.message);
@@ -93,6 +98,10 @@ export default function App() {
       socket.onopen = () => {
         setError("");
         setSocketState("connected");
+        const { cols, rows } = terminalSizeRef.current;
+        if (cols > 0 && rows > 0) {
+          socket.send(JSON.stringify({ type: "resize", cols, rows }));
+        }
       };
 
       socket.onmessage = (event) => {
@@ -103,6 +112,7 @@ export default function App() {
             setEvents((prev) => mergeEvents(prev, snapshot));
             if (typeof payload.next_seq === "number") {
               nextSeqRef.current = payload.next_seq;
+              setReplayCutoffSeq(Math.max(0, payload.next_seq - 1));
             }
             return;
           }
@@ -200,6 +210,19 @@ export default function App() {
     });
   }
 
+  function handleResizeTerminal(cols, rows) {
+    terminalSizeRef.current = { cols, rows };
+
+    if (!selectedTaskId) {
+      return;
+    }
+
+    const socket = wsRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "resize", cols, rows }));
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -221,6 +244,8 @@ export default function App() {
             events={events}
             onStopTask={handleStopTask}
             onSendInput={handleSendTaskInput}
+            onResizeTerminal={handleResizeTerminal}
+            replayCutoffSeq={replayCutoffSeq}
             socketState={socketState}
           />
         </section>

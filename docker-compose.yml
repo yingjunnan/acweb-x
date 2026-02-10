@@ -15,6 +15,16 @@ services:
       timeout: 5s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   backend:
     build:
       context: ./backend
@@ -24,12 +34,15 @@ services:
       DB_INIT_RETRIES: "30"
       DB_INIT_RETRY_DELAY: "1.0"
       AUTO_CREATE_TABLES: "1"
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   frontend:

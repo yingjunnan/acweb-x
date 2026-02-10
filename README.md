@@ -26,11 +26,13 @@ Persistence behavior:
 - PostgreSQL is supported with async driver (`postgresql+asyncpg://...`).
 - `postgres://` and `postgresql://` are auto-normalized to `postgresql+asyncpg://`.
 - Incomplete tasks are marked as failed on API restart (with recovery event).
+- Optional Redis pub/sub fan-out can be enabled with `REDIS_URL` for websocket subscribers across processes.
 
 Quick shell usage:
 
 - Start a task with `zsh -i` to open an interactive shell session.
 - Type directly inside the terminal pane to send commands (for example `ls`, `pwd`, `git status`).
+- Terminal size changes are synced to the backend PTY, so zsh prompts and Ctrl+C/interactive behavior stay closer to a native terminal.
 
 ## Local development
 
@@ -100,7 +102,8 @@ docker compose up --build
 This starts:
 
 - `postgres` on `localhost:5432`
-- `backend` with `DATABASE_URL=postgresql+asyncpg://acweb:acweb_dev_pw@postgres:5432/acweb`
+- `redis` on `localhost:6379`
+- `backend` with `DATABASE_URL=postgresql+asyncpg://acweb:acweb_dev_pw@postgres:5432/acweb` and `REDIS_URL=redis://redis:6379/0`
 - `frontend` on `http://localhost:5173`
 
 ### Option B: Run backend locally, DB in Docker
@@ -128,6 +131,24 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd /Users/yingjunnan/acweb/frontend
 npm run dev
+```
+
+### Optional: enable Redis fan-out for local backend
+
+1) Start Redis container:
+
+```bash
+cd /Users/yingjunnan/acweb
+docker compose up -d redis
+```
+
+2) Run backend with Redis URL:
+
+```bash
+cd /Users/yingjunnan/acweb/backend
+source .venv/bin/activate
+export REDIS_URL='redis://localhost:6379/0'
+uvicorn app.main:app --reload --port 8000
 ```
 
 
@@ -176,8 +197,8 @@ docker compose up --build
 
 ## Next iterations
 
-- Add Redis event fan-out and reconnect cursor cache.
 - Add Runner service managed by systemd for stronger process continuity.
+- Add HA cursor cache and multi-instance reconciliation optimization.
 - Add auth, RBAC, and audit logging.
 
 ## Development stages
@@ -185,5 +206,5 @@ docker compose up --build
 - Plan overview: `/Users/yingjunnan/acweb/docs/development-plan.md`
 - Stage records: `/Users/yingjunnan/acweb/docs/stages/`
   - Stage 1: interactive terminal baseline (completed)
-  - Stage 2: persistence and recovery (in progress)
+  - Stage 2: persistence and recovery (in progress; Redis fan-out baseline done)
   - Stage 3: auth, RBAC, and audit logging (planned)

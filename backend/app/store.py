@@ -2,19 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
+import json
 import os
 import pty
 import shlex
+import signal
+import struct
+import termios
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 from uuid import uuid4
 
 from sqlalchemy import func, select
 
 from .db import SessionLocal, TaskEventRow, TaskRow
 from .models import Project, StreamType, TaskEvent, TaskState, TaskSummary
+
+try:
+    import redis.asyncio as redis_asyncio
+except Exception:  # noqa: BLE001
+    redis_asyncio = None
 
 
 def utc_now() -> datetime:
@@ -60,10 +70,44 @@ class TaskStore:
         self._subscribers_lock = asyncio.Lock()
         self._event_lock = asyncio.Lock()
         self._runtime: dict[str, RuntimeHandle] = {}
+
+        self._redis_url = os.getenv("REDIS_URL")
+        self._redis = None
+        self._redis_enabled = False
+        self._redis_listener_tasks: dict[str, asyncio.Task[None]] = {}
+        self._redis_lock = asyncio.Lock()
+
         self._projects = [
             Project(id="default", name="Default Workspace", path=str(Path.cwd())),
             Project(id="docs", name="Content Studio", path=str(Path.cwd() / "content")),
         ]
+
+    async def startup(self) -> None:
+        if not self._redis_url or redis_asyncio is None:
+            return
+
+        try:
+            self._redis = redis_asyncio.from_url(self._redis_url, decode_responses=True)
+            await self._redis.ping()
+            self._redis_enabled = True
+        except Exception:  # noqa: BLE001
+            self._redis_enabled = False
+            await self._close_async_resource(self._redis)
+            self._redis = None
+
+    async def shutdown(self) -> None:
+        async with self._redis_lock:
+            listeners = list(self._redis_listener_tasks.values())
+            self._redis_listener_tasks.clear()
+
+        for task in listeners:
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await task
+
+        await self._close_async_resource(self._redis)
+        self._redis = None
+        self._redis_enabled = False
 
     def list_projects(self) -> list[Project]:
         return self._projects
@@ -165,6 +209,22 @@ class TaskStore:
 
         return False
 
+    async def resize_terminal(self, task_id: str, cols: int, rows: int) -> bool:
+        runtime = self._runtime.get(task_id)
+        if not runtime or runtime.process.returncode is not None:
+            return False
+
+        cols, rows = self._normalize_terminal_size(cols, rows)
+
+        try:
+            self._set_pty_winsize(runtime.master_fd, cols, rows)
+            pgid = os.getpgid(runtime.process.pid)
+            os.killpg(pgid, signal.SIGWINCH)
+        except OSError:
+            return False
+
+        return True
+
     async def subscribe(self, task_id: str) -> tuple[TaskRecord | None, asyncio.Queue[TaskEvent] | None]:
         task = await self.get_task(task_id)
         if not task:
@@ -176,9 +236,14 @@ class TaskStore:
                 self._subscribers[task_id] = set()
             self._subscribers[task_id].add(queue)
 
+        if self._redis_enabled:
+            await self._ensure_redis_listener(task_id)
+
         return task, queue
 
     async def unsubscribe(self, task: TaskRecord, queue: asyncio.Queue[TaskEvent]) -> None:
+        should_stop_listener = False
+
         async with self._subscribers_lock:
             queues = self._subscribers.get(task.id)
             if not queues:
@@ -186,6 +251,10 @@ class TaskStore:
             queues.discard(queue)
             if not queues:
                 self._subscribers.pop(task.id, None)
+                should_stop_listener = True
+
+        if should_stop_listener:
+            await self._stop_redis_listener(task.id)
 
     async def events_since(self, task_id: str, from_seq: int) -> tuple[TaskRecord | None, list[TaskEvent]]:
         async with SessionLocal() as session:
@@ -227,22 +296,16 @@ class TaskStore:
             ts=now,
         )
 
-        async with self._subscribers_lock:
-            queues = list(self._subscribers.get(task_id, set()))
-
-        dead_queues: list[asyncio.Queue[TaskEvent]] = []
-        for queue in queues:
-            try:
-                queue.put_nowait(event)
-            except asyncio.QueueFull:
-                dead_queues.append(queue)
-
-        if dead_queues:
-            async with self._subscribers_lock:
-                current = self._subscribers.get(task_id)
-                if current:
-                    for queue in dead_queues:
-                        current.discard(queue)
+        if self._redis_enabled:
+            published = await self._publish_redis_event(event)
+            if not published:
+                await self._dispatch_local(event)
+            elif await self._has_local_subscribers(task_id):
+                if not await self._has_active_redis_listener(task_id):
+                    await self._dispatch_local(event)
+                    await self._ensure_redis_listener(task_id)
+        else:
+            await self._dispatch_local(event)
 
         return event
 
@@ -262,6 +325,8 @@ class TaskStore:
 
         try:
             master_fd, slave_fd = pty.openpty()
+            self._set_pty_winsize(master_fd, 120, 32)
+
             env = os.environ.copy()
             env.setdefault("TERM", "xterm-256color")
 
@@ -272,7 +337,7 @@ class TaskStore:
                 stderr=slave_fd,
                 cwd=task.cwd,
                 env=env,
-                start_new_session=True,
+                preexec_fn=self._build_pty_preexec(slave_fd),
             )
 
             os.close(slave_fd)
@@ -342,6 +407,133 @@ class TaskStore:
 
             text = chunk.decode("utf-8", errors="replace")
             await self.append_event(task_id, "stdout", text)
+
+    async def _publish_redis_event(self, event: TaskEvent) -> bool:
+        if not self._redis_enabled or self._redis is None:
+            return False
+
+        channel = self._task_channel(event.task_id)
+        payload = json.dumps(event.model_dump(mode="json"))
+
+        try:
+            await self._redis.publish(channel, payload)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _ensure_redis_listener(self, task_id: str) -> None:
+        if not self._redis_enabled or self._redis is None:
+            return
+
+        async with self._redis_lock:
+            existing = self._redis_listener_tasks.get(task_id)
+            if existing and not existing.done():
+                return
+            self._redis_listener_tasks[task_id] = asyncio.create_task(self._redis_listener_loop(task_id))
+
+    async def _stop_redis_listener(self, task_id: str) -> None:
+        async with self._redis_lock:
+            task = self._redis_listener_tasks.pop(task_id, None)
+
+        if task:
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await task
+
+    async def _has_active_redis_listener(self, task_id: str) -> bool:
+        async with self._redis_lock:
+            task = self._redis_listener_tasks.get(task_id)
+            return bool(task and not task.done())
+
+    async def _has_local_subscribers(self, task_id: str) -> bool:
+        async with self._subscribers_lock:
+            return bool(self._subscribers.get(task_id))
+
+    async def _redis_listener_loop(self, task_id: str) -> None:
+        if not self._redis_enabled or self._redis is None:
+            return
+
+        channel = self._task_channel(task_id)
+        pubsub = self._redis.pubsub()
+        await pubsub.subscribe(channel)
+
+        try:
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message and message.get("type") == "message":
+                    data = message.get("data")
+                    if isinstance(data, str):
+                        try:
+                            event = TaskEvent.model_validate_json(data)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        await self._dispatch_local(event)
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            with contextlib.suppress(Exception):
+                await pubsub.unsubscribe(channel)
+            await self._close_async_resource(pubsub)
+
+    async def _dispatch_local(self, event: TaskEvent) -> None:
+        async with self._subscribers_lock:
+            queues = list(self._subscribers.get(event.task_id, set()))
+
+        dead_queues: list[asyncio.Queue[TaskEvent]] = []
+        for queue in queues:
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                dead_queues.append(queue)
+
+        if dead_queues:
+            async with self._subscribers_lock:
+                current = self._subscribers.get(event.task_id)
+                if current:
+                    for queue in dead_queues:
+                        current.discard(queue)
+
+    @staticmethod
+    def _build_pty_preexec(slave_fd: int) -> Callable[[], None]:
+        def _preexec() -> None:
+            os.setsid()
+            with contextlib.suppress(OSError):
+                fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+
+        return _preexec
+
+    @staticmethod
+    def _normalize_terminal_size(cols: int, rows: int) -> tuple[int, int]:
+        safe_cols = max(40, min(int(cols), 300))
+        safe_rows = max(12, min(int(rows), 200))
+        return safe_cols, safe_rows
+
+    @staticmethod
+    def _set_pty_winsize(fd: int, cols: int, rows: int) -> None:
+        safe_cols, safe_rows = TaskStore._normalize_terminal_size(cols, rows)
+        packed = struct.pack("HHHH", safe_rows, safe_cols, 0, 0)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, packed)
+
+    def _task_channel(self, task_id: str) -> str:
+        return f"acweb:task:{task_id}"
+
+    async def _close_async_resource(self, resource) -> None:
+        if resource is None:
+            return
+
+        close_method = getattr(resource, "aclose", None)
+        if callable(close_method):
+            with contextlib.suppress(Exception):
+                await close_method()
+            return
+
+        close_method = getattr(resource, "close", None)
+        if callable(close_method):
+            result = close_method()
+            if asyncio.iscoroutine(result):
+                with contextlib.suppress(Exception):
+                    await result
 
     async def _load_events(self, session, task_id: str) -> list[TaskEvent]:
         result = await session.execute(

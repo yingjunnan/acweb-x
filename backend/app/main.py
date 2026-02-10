@@ -25,7 +25,13 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup() -> None:
     await init_db()
+    await store.startup()
     await store.recover_incomplete_tasks()
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    await store.shutdown()
 
 
 @app.get("/api/v1/health")
@@ -149,3 +155,8 @@ async def _receiver_loop(websocket: WebSocket, task_id: str) -> None:
             await store.write_input(task_id, data)
         elif event_type == "stop":
             await store.stop_task(task_id)
+        elif event_type == "resize":
+            cols = message.get("cols")
+            rows = message.get("rows")
+            if isinstance(cols, int) and isinstance(rows, int):
+                await store.resize_terminal(task_id, cols, rows)
